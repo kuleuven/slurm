@@ -508,6 +508,26 @@ Default: (disabled)
 .IP
 
 .TP
+\fBscope\fR=
+Validate the scope of the jwt token. If set, the token must have the given
+scope in order to authenticate against slurm. This option is designed to 
+allow compatibility with tokens generated outside of Slurm.
+.NR
+Default: (disabled)
+.RE
+.IP
+
+.TP
+\fBaudience\fR=
+Validate the audience of the jwt token. If set, the token must have the given
+audience in order to authenticate against slurm. This option is designed to 
+allow compatibility with tokens generated outside of Slurm.
+.NR
+Default: (disabled)
+.RE
+.IP
+
+.TP
 \fBAuthInfo\fR
 Additional information to be used for authentication of communications
 between the Slurm daemons (slurmctld and slurmd) and the Slurm

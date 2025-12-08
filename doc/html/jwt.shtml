@@ -285,6 +285,26 @@ KeyCloak 25.0, for example, you should find this option under <b>Clients ->
 Client details -> Dedicated scopes -> Mapper details</b>. Change the username
 mapping to use the <code>sun</code> field.</p>
 
+<h3 id="token_validation">Token validation
+<a class="slurm_link" href="#token_validation"></a></h3>
+
+<p>The token can be validated to have a certain scope or a certain audience,
+before it is accepted. By default, no scope or audience is checked.</p>
+
+<p><b>Scope validation</b>: Add the <a href="slurm.conf.html#OPT_scope=">
+AuthAltParameters=scope</a>. For example, set:
+<pre>
+AuthAltParameters=jwks=/local/path/to/jwks.json,userclaimfield=preferred_username,scope=slurm:access
+</pre>
+</p>
+
+<p><b>Audience validation</b>: Add the <a href="slurm.conf.html#OPT_audience=">
+AuthAltParameters=audience</a>. For example, set:
+<pre>
+AuthAltParameters=jwks=/local/path/to/jwks.json,userclaimfield=preferred_username,audience=slurm.example.org
+</pre>
+</p>
+
 <h2 id="compatibility">Compatibility
 <a class="slurm_link" href="#compatibility"></a>
 </h2>
