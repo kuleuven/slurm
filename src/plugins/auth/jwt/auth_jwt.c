@@ -85,6 +85,8 @@ static data_t *jwks = NULL;
 static buf_t *key = NULL;
 static char *token = NULL;
 static char *claim_field = NULL;
+static char *required_scope = NULL;
+static char *required_audience = NULL;
 static __thread char *thread_token = NULL;
 static __thread char *thread_username = NULL;
 
@@ -218,6 +220,98 @@ static void _init_hs256(void)
 	xfree(key_file);
 }
 
+/*
+ * Check if the token's audience matches the required audience.
+ * The 'aud' claim can be either a string or an array of strings (RFC 7519).
+ */
+static bool _check_audience(jwt_t *jwt)
+{
+	if (!required_audience) {
+		/* No audience requirement configured, allow all tokens */
+		return true;
+	}
+
+    jwt_valid_t *jwt_valid = NULL;
+
+    if (jwt_valid_new(&jwt_valid, JWT_ALG_NONE) != 0) {
+        error("%s: jwt_valid_new failed", __func__);
+        return false;
+    }
+
+    if (jwt_valid_add_grant(jwt_valid, "aud", required_audience) != 0) {
+        error("%s: jwt_valid_add_grant failed", __func__);
+        jwt_valid_free(jwt_valid);
+        return false;
+    }
+
+    if (jwt_validate(jwt, jwt_valid) != 0) {
+        error("%s: jwt_validate failed (audience mismatch)", __func__);
+        jwt_valid_free(jwt_valid);
+        return false;
+    }
+
+    debug("%s: audience matched via jwt_validate", __func__);
+
+    jwt_valid_free(jwt_valid);
+    return true;
+}
+
+/*
+ * Check if the token's scope matches the required scope.
+ * Supports both space-delimited scope strings and exact matches.
+ */
+static bool _check_scope(jwt_t *jwt)
+{
+	const char *token_scope;
+	char *scope_copy, *token, *saveptr;
+	bool scope_matched = false;
+
+	if (!required_scope) {
+		/* No scope requirement configured, allow all tokens */
+		return true;
+	}
+
+	/* Get the scope claim from the JWT */
+	token_scope = jwt_get_grant(jwt, "scope");
+	if (!token_scope) {
+		error("%s: token missing required 'scope' claim", __func__);
+		return false;
+	}
+
+	debug2("%s: checking token scope '%s' against required scope '%s'",
+	       __func__, token_scope, required_scope);
+
+	/* Check for exact match first */
+	if (!xstrcmp(token_scope, required_scope)) {
+		debug("%s: exact scope match", __func__);
+		return true;
+	}
+
+	/*
+	 * Check if required_scope is present in the space-delimited
+	 * scope string (OAuth 2.0 standard format)
+	 */
+	scope_copy = xstrdup(token_scope);
+	token = strtok_r(scope_copy, " ", &saveptr);
+	while (token != NULL) {
+		if (!xstrcmp(token, required_scope)) {
+			scope_matched = true;
+			break;
+		}
+		token = strtok_r(NULL, " ", &saveptr);
+	}
+	xfree(scope_copy);
+
+	if (scope_matched) {
+		debug("%s: scope matched in space-delimited list", __func__);
+	} else {
+		error("%s: token scope '%s' does not contain required scope '%s'",
+		      __func__, token_scope, required_scope);
+	}
+
+	return scope_matched;
+}
+
 extern int init(void)
 {
 	if (running_in_slurmctld() || running_in_slurmdbd()) {
@@ -239,6 +333,36 @@ extern int init(void)
 
 			info("Custom user claim field: %s", claim_field);
 		}
+
+		/*
+		 * Scope validation
+		 * Usage: AuthAltParameters=jwt_key=/path/to/key,scope=slurm:access
+		 */
+		if ((claim = xstrstr(slurm_conf.authalt_params, "scope="))) {
+			char *end;
+
+			required_scope = xstrdup(claim + 6);
+			if ((end = xstrstr(required_scope, ",")))
+				*end = '\0';
+
+			info("%s: Required scope configured: %s", 
+			     plugin_type, required_scope);
+		}
+
+		/*
+		 * Audience validation
+		 * Usage: AuthAltParameters=jwt_key=/path/to/key,audience=slurm-cluster
+		 */
+		if ((claim = xstrstr(slurm_conf.authalt_params, "audience="))) {
+			char *end;
+
+			required_audience = xstrdup(claim + 9);
+			if ((end = xstrstr(required_audience, ",")))
+				*end = '\0';
+
+			info("%s: Required audience configured: %s", 
+			     plugin_type, required_audience);
+		}
 	} else {
 		/* we must be in a client command */
 		token = getenv("SLURM_JWT");
@@ -258,6 +382,8 @@ extern int init(void)
 extern void fini(void)
 {
 	xfree(claim_field);
+	xfree(required_scope);
+	xfree(required_audience);
 	FREE_NULL_DATA(jwks);
 	FREE_NULL_BUFFER(key);
 }
@@ -412,6 +538,22 @@ extern int auth_p_verify(auth_token_t *cred, char *auth_info)
 	if (jwt_get_grant_int(jwt, "exp") < time(NULL)) {
 		error("%s: token expired", __func__);
 		auth_rc = ESLURM_AUTH_EXPIRED;
+		goto fail;
+	}
+
+	/*
+	 * Check if the token has the required audience
+	 */
+	if (!_check_audience(jwt)) {
+		error("%s: token does not have required audience", __func__);
+		goto fail;
+	}
+
+	/*
+	 * Check if the token has the required scope
+	 */
+	if (!_check_scope(jwt)) {
+		error("%s: token does not have required scope", __func__);
 		goto fail;
 	}
 
